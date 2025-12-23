@@ -1,2 +1,2 @@
-# powered-shopping-assistant
+# powered_shopping_assistant
 powered_shopping_assistant
