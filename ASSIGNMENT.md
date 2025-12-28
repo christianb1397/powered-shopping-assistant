@@ -80,6 +80,8 @@ Building embeddings for thousands of products is computationally intensive. Goog
    This should take 5-10 minutes with GPU vs 1-2 hours on CPU.
 6. Download the `vector_db` folder and place it in your local project root directory.
 
+e832fa42-9609-4262-9cd4-6e363bcd08f8
+
 ### Option B: Local Machine
 If you prefer to run locally:
 ```bash

@@ -179,7 +179,74 @@ def structured_search_tool(
     LLM Usage Note:
     This tool is ideal for filtered browsing, purchase history analysis, or category breakdowns.
     """
-    pass
+    import pandas as pd
+
+    df = products.merge(aisles, on="aisle_id").merge(departments, on="department_id")
+
+    if history_only:
+        user_id = get_user_id()
+        if user_id is None:
+            return [{"error": "User ID not set. Call set_user_id(user_id) first."}]
+
+        user_orders = orders[orders["user_id"] == user_id]
+        user_prior = prior.merge(
+            user_orders[["order_id"]],
+            on="order_id"
+        )
+
+        stats = (
+            user_prior
+            .groupby("product_id")
+            .agg(
+                count=("order_id", "count"),
+                reordered=("reordered", "sum"),
+                add_to_cart_order=("add_to_cart_order", "mean"),
+            )
+            .reset_index()
+        )
+
+        df = df.merge(stats, on="product_id")
+
+    if product_name:
+        df = df[df["product_name"].str.contains(product_name, case=False, na=False)]
+
+    if department:
+        df = df[df["department"] == department]
+
+    if aisle:
+        df = df[df["aisle"].str.contains(aisle.lower(), case=False, na=False)]
+
+    if history_only and reordered is not None:
+        if reordered:
+            df = df[df["reordered"] > 0]
+        else:
+            df = df[df["reordered"] == 0]
+
+    if history_only and min_orders is not None:
+        df = df[df["count"] >= min_orders]
+
+    if group_by:
+        grouped = (
+            df.groupby(group_by)
+            .size()
+            .reset_index(name="num_products")
+        )
+        return grouped.to_dict(orient="records")
+
+    if history_only and order_by:
+        df = df.sort_values(order_by, ascending=ascending)
+
+    if top_k:
+        df = df.head(top_k)
+
+    columns = ["product_id", "product_name", "aisle", "department"]
+
+    if history_only:
+        for col in ["count", "reordered", "add_to_cart_order"]:
+            if col in df.columns:
+                columns.append(col)
+
+    return df[columns].to_dict(orient="records")
 
 
 # TODO
@@ -284,7 +351,24 @@ def search_products(query: str, top_k: int = 5):
     ]
     ```
     """
-    pass
+    query_text = make_query_prompt(query)
+
+    vector_store = get_vector_store()
+
+    results = vector_store.similarity_search(query_text, k=top_k)
+
+    formatted_results = []
+
+    for doc in results:
+        formatted_results.append({
+            "product_id": doc.metadata.get("product_id"),
+            "product_name": doc.metadata.get("product_name"),
+            "aisle": doc.metadata.get("aisle"),
+            "department": doc.metadata.get("department"),
+            "text": doc.page_content,
+        })
+    
+    return formatted_results
 
 
 # TODO
@@ -343,7 +427,22 @@ def search_tool(query: str) -> str:
     search_tool("something high protein for breakfast")
     ```
     """
-    pass
+
+    results = search_products(query)
+
+    if not results:
+        return "No products found matching your search."
+
+    formatted_lines = []
+    for product in results:
+        formatted_lines.append(
+            f"- {product['product_name']} (ID: {product['product_id']})\n"
+            f"  Aisle: {product['aisle']}\n"
+            f"  Department: {product['department']}\n"
+            f"  Details: {product['text']}"
+        )
+
+    return "\n".join(formatted_lines)
 
 
 # ---- UPDATED: Cart tools with quantity support ----
@@ -495,7 +594,12 @@ def create_tool_node_with_fallback(tools: list) -> ToolNode:
     Returns:
     - ToolNode: A LangGraph-compatible tool node with error fallback logic.
     """
-    pass
+    tool_node = ToolNode(tools)
+
+    return tool_node.with_fallbacks(
+        [handle_tool_error],
+        exception_key="error"
+    )
 
 
 __all__ = [
