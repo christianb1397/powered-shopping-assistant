@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+dataset/
 develop-eggs/
 dist/
 downloads/
@@ -22,7 +23,6 @@ var/
 vector_db/
 wheels/
 share/python-wheels/
-dataset/
 *.egg-info/
 .installed.cfg
 *.egg
