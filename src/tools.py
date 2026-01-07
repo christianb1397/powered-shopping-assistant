@@ -179,74 +179,90 @@ def structured_search_tool(
     LLM Usage Note:
     This tool is ideal for filtered browsing, purchase history analysis, or category breakdowns.
     """
-    import pandas as pd
+    try:
 
-    df = products.merge(aisles, on="aisle_id").merge(departments, on="department_id")
-
-    if history_only:
-        user_id = get_user_id()
-        if user_id is None:
-            return [{"error": "User ID not set. Call set_user_id(user_id) first."}]
-
-        user_orders = orders[orders["user_id"] == user_id]
-        user_prior = prior.merge(
-            user_orders[["order_id"]],
-            on="order_id"
+        df = (
+            products
+            .merge(departments, on="department_id", how="left")
+            .merge(aisles, on="aisle_id", how="left")
         )
 
-        stats = (
-            user_prior
-            .groupby("product_id")
-            .agg(
-                count=("order_id", "count"),
-                reordered=("reordered", "sum"),
-                add_to_cart_order=("add_to_cart_order", "mean"),
+        # Normalize text columns
+        df["product_name"] = df["product_name"].str.lower()
+        df["department"] = df["department"].str.lower()
+        df["aisle"] = df["aisle"].str.lower()
+
+
+        if history_only:
+            user_id = get_user_id()
+            if user_id is None:
+                return [{"error": "User ID not set. Call set_user_id(user_id) first."}]
+
+            user_orders = orders[orders["user_id"] == user_id]
+
+            user_prior = (
+                prior
+                .merge(user_orders[["order_id"]], on="order_id", how="inner")
             )
-            .reset_index()
-        )
 
-        df = df.merge(stats, on="product_id")
+            stats = (
+                user_prior
+                .groupby("product_id")
+                .agg(
+                    count=("order_id", "count"),
+                    reordered=("reordered", "sum"),
+                    add_to_cart_order=("add_to_cart_order", "mean"),
+                )
+                .reset_index()
+            )
 
-    if product_name:
-        df = df[df["product_name"].str.contains(product_name, case=False, na=False)]
+            df = df.merge(stats, on="product_id", how="inner")
 
-    if department:
-        df = df[df["department"] == department]
+            if reordered is not None:
+                if reordered:
+                    df = df[df["reordered"] > 0]
+                else:
+                    df = df[df["reordered"] == 0]
 
-    if aisle:
-        df = df[df["aisle"].str.contains(aisle.lower(), case=False, na=False)]
+            if min_orders is not None:
+                df = df[df["count"] >= min_orders]
 
-    if history_only and reordered is not None:
-        if reordered:
-            df = df[df["reordered"] > 0]
-        else:
-            df = df[df["reordered"] == 0]
+            if order_by is not None:
+                df = df.sort_values(order_by, ascending=ascending)
 
-    if history_only and min_orders is not None:
-        df = df[df["count"] >= min_orders]
 
-    if group_by:
-        grouped = (
-            df.groupby(group_by)
-            .size()
-            .reset_index(name="num_products")
-        )
-        return grouped.to_dict(orient="records")
+        if product_name:
+            df = df[df["product_name"].str.contains(product_name.lower(), na=False)]
 
-    if history_only and order_by:
-        df = df.sort_values(order_by, ascending=ascending)
+        if department:
+            df = df[df["department"] == department.lower()]
 
-    if top_k:
-        df = df.head(top_k)
+        if aisle:
+            df = df[df["aisle"].str.contains(aisle.lower(), na=False)]
 
-    columns = ["product_id", "product_name", "aisle", "department"]
+        if group_by:
+            grouped = (
+                df.groupby(group_by)
+                .size()
+                .reset_index(name="num_products")
+                .sort_values("num_products", ascending=False)
+            )
+            return grouped.to_dict(orient="records")
 
-    if history_only:
-        for col in ["count", "reordered", "add_to_cart_order"]:
-            if col in df.columns:
-                columns.append(col)
 
-    return df[columns].to_dict(orient="records")
+        if top_k:
+            df = df.head(top_k)
+
+
+        output_cols = ["product_id", "product_name", "aisle", "department"]
+
+        if history_only:
+            output_cols += ["count", "reordered", "add_to_cart_order"]
+
+        return df[output_cols].to_dict(orient="records")
+
+    except Exception as e:
+        return [{"error": str(e)}]
 
 
 # TODO
@@ -360,14 +376,16 @@ def search_products(query: str, top_k: int = 5):
     formatted_results = []
 
     for doc in results:
+        metadata = doc.metadata or {}
+
         formatted_results.append({
-            "product_id": doc.metadata.get("product_id"),
-            "product_name": doc.metadata.get("product_name"),
-            "aisle": doc.metadata.get("aisle"),
-            "department": doc.metadata.get("department"),
-            "text": doc.page_content,
+            "product_id": metadata.get("product_id"),
+            "product_name": metadata.get("product_name"),
+            "aisle": metadata.get("aisle"),
+            "department": metadata.get("department"),
+            "text": doc.page_content
         })
-    
+
     return formatted_results
 
 
@@ -434,6 +452,7 @@ def search_tool(query: str) -> str:
         return "No products found matching your search."
 
     formatted_lines = []
+
     for product in results:
         formatted_lines.append(
             f"- {product['product_name']} (ID: {product['product_id']})\n"
@@ -442,7 +461,7 @@ def search_tool(query: str) -> str:
             f"  Details: {product['text']}"
         )
 
-    return "\n".join(formatted_lines)
+    return "\n\n".join(formatted_lines)
 
 
 # ---- UPDATED: Cart tools with quantity support ----
@@ -596,11 +615,12 @@ def create_tool_node_with_fallback(tools: list) -> ToolNode:
     """
     tool_node = ToolNode(tools)
 
-    return tool_node.with_fallbacks(
-        [handle_tool_error],
+    tool_node = tool_node.with_fallbacks(
+        [RunnableLambda(handle_tool_error)],
         exception_key="error"
     )
 
+    return tool_node
 
 __all__ = [
     "RouteToCustomerSupport",
