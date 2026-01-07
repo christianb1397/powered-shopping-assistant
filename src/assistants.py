@@ -46,7 +46,7 @@ support_runnable = support_prompt.partial(time=datetime.now) | llm.bind_tools(
 )
 
 # TODO
-def sales_assistant(state: State, config: RunnableConfig, runnable=sales_runnable) -> dict:
+async def sales_assistant(state: State, config: RunnableConfig, runnable=sales_runnable) -> dict:
     """
     LangGraph node function for running the sales assistant LLM agent.
 
@@ -72,15 +72,27 @@ def sales_assistant(state: State, config: RunnableConfig, runnable=sales_runnabl
     Example: `{"messages": [AIMessage(...)]}`
     """
 
-    thread_id = config.get("thread_id")
+    # Obtener thread_id correctamente
+    thread_id = config.get("configurable", {}).get("thread_id")
     if thread_id is not None:
         set_thread_id(thread_id)
 
     set_user_id(0)
 
-    result = runnable.invoke(state, config)
+    # ✅ Usar ainvoke (async)
+    result = await runnable.ainvoke(state, config)
 
-    return {"messages": result["messages"]}
+    # Normalizar salida
+    if isinstance(result, dict):
+        messages = result.get("messages", [])
+    else:
+        messages = result
+
+    # Asegurar lista
+    if not isinstance(messages, list):
+        messages = [messages]
+
+    return {"messages": messages}
 
 
 def support_assistant(state: State, config: RunnableConfig) -> dict:
